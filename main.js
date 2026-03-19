@@ -1,5 +1,5 @@
 (() => {
-	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyngvt2NN-D8WNSoBHBzLJUl0dgfH91__5p6BkmQsfEXdHXbb5psD0FAPEhzSPojQZH/exec';
+	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyEeXu5602tSW2uth2qrhf9d60N4utS06MZNrQ0HHs6JWtjqMHGrASHPInBAHs8IIpA8g/exec';
 
 	const state = {
 		citas: [],
