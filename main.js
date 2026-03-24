@@ -1,5 +1,6 @@
 (() => {
 	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwHEEMiK_lmxiZM5Jkt4gK6dU3WF1sLjP5aHvOGOnyeJK0vkmyhk1-a9DlcNr6fsId0Ng/exec';
+	const DELETE_CITA_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbx0Yxqxhk-_15pSZAFTR_omHFzGWX4kjzikyi4QgOJNJnL8J2Dh8NFhZWlbM3uDwqAL/exec';
 
 	const state = {
 		citas: [],
@@ -77,6 +78,7 @@
 		tipoDificultadOtro: document.getElementById('tipoDificultadOtro'),
 
 		notasForm: document.getElementById('notasForm'),
+		anularCitaBtn: document.getElementById('anularCitaBtn'),
 		reminderForm: document.getElementById('reminderForm'),
 		sendReminderBtn: document.getElementById('sendReminderBtn'),
 		reminderModalidadBadge: document.getElementById('reminderModalidadBadge'),
@@ -114,6 +116,7 @@
 		ui.quickFilters.addEventListener('click', handleQuickFilterClick);
 		ui.tabsNav.addEventListener('click', handleTabClick);
 		ui.notasForm.addEventListener('submit', handleSaveNotas);
+		ui.anularCitaBtn.addEventListener('click', handleDeleteCita);
 		ui.reminderForm.addEventListener('submit', handleSendReminder);
 		ui.refreshBtn.addEventListener('click', loadCitas);
 		ui.logoutBtn.addEventListener('click', handleLogout);
@@ -313,6 +316,7 @@
 			.map((cita) => {
 				const active = state.selectedId === cita.id;
 				const instituteTag = getInstituteBadge(cita.instituto);
+				const modalidadLabel = getModalidadLabel(cita);
 				const groupLabel = getDateGroupLabel(cita.fecha);
 				const fechaHora = `${formatDateDisplay(cita.fecha)} - ${formatTimeDisplay(cita.hora)}`;
 				const showGroup = groupLabel !== lastGroupLabel;
@@ -329,7 +333,7 @@
 							<h3 class="font-medium text-gray-900">${escapeHtml(cita.reservadoPor || 'Sin nombre')}</h3>
 							<span class="${getStatusClass(cita.estado)} text-xs px-2 py-1 rounded-full font-medium">${escapeHtml(cita.estado || 'Programada')}</span>
 						</div>
-						<p class="text-xs text-gray-500 mt-1">${escapeHtml(fechaHora)}</p>
+						<p class="text-xs text-gray-500 mt-1">${escapeHtml(fechaHora)}${modalidadLabel ? ` · <span class="font-semibold text-gray-700">${escapeHtml(modalidadLabel)}</span>` : ''}</p>
 						<div class="mt-2 flex items-center gap-2">
 							${instituteTag}
 						</div>
@@ -425,6 +429,11 @@
 			reservadoPor: cita.reservadoPor,
 			correo: cita.correo,
 			telefono: cita.telefono,
+			edad: cita.edad,
+			ciclo: cita.ciclo,
+			carrera: cita.carrera,
+			conviveCon: cita.conviveCon,
+			motivoConsulta: cita.motivoConsulta,
 		});
 
 		switchTab(state.activeTab);
@@ -497,6 +506,46 @@
 			})
 			.catch((err) => showToast(err.message || 'No se pudo guardar', 'error'))
 			.finally(() => setButtonLoading(submitBtn, false));
+	}
+
+	function handleDeleteCita() {
+		const cita = getSelectedCita();
+		if (!cita) return;
+
+		const confirmed = window.confirm(
+			`¿Seguro que deseas anular esta cita?\n\nAlumno: ${cita.reservadoPor || 'Sin nombre'}\nID: ${cita.id}\n\nEsta acción eliminará el registro.`
+		);
+		if (!confirmed) return;
+
+		const deleteUrl = `${DELETE_CITA_WEBAPP_URL}?action=delete&id=${encodeURIComponent(cita.id)}`;
+		setButtonLoading(ui.anularCitaBtn, true);
+
+		fetch(deleteUrl, {
+			method: 'GET',
+			mode: 'no-cors',
+			cache: 'no-store',
+		})
+			.then(() => runServer('getCitas'))
+			.then((citasActualizadas) => {
+				state.citas = Array.isArray(citasActualizadas) ? sortCitas(citasActualizadas) : [];
+				state.visibleCount = LIST_BATCH_SIZE;
+
+				const stillExists = state.citas.some((item) => item.id === cita.id);
+				if (!stillExists) {
+					state.selectedId = null;
+					showToast('Cita anulada correctamente', 'success');
+				} else {
+					showToast('Solicitud enviada. Si aún aparece, pulsa Actualizar.', 'info');
+				}
+
+				applyFilters();
+				renderKpis(state.citas);
+				renderDetail();
+			})
+			.catch(() => {
+				showToast('La cita pudo haberse anulado, pero el navegador no pudo confirmarlo. Pulsa Actualizar.', 'info');
+			})
+			.finally(() => setButtonLoading(ui.anularCitaBtn, false));
 	}
 
 	function handleSendReminder(e) {
@@ -600,6 +649,19 @@
 				? 'bg-orange-100 text-orange-700'
 				: 'bg-gray-100 text-gray-700';
 		return `<span class="${cls} text-[11px] font-medium px-2 py-1 rounded-full">${text}</span>`;
+	}
+
+	function getModalidadLabel(cita) {
+		const modalidadType = getModalidadType(cita);
+		if (modalidadType === 'virtual') {
+			return 'Virtual';
+		}
+
+		if (modalidadType === 'presencial') {
+			return 'Presencial';
+		}
+
+		return '';
 	}
 
 	function getInstituteGroup(instituto) {
