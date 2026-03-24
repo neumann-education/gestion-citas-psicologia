@@ -1,5 +1,5 @@
 (() => {
-	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyEeXu5602tSW2uth2qrhf9d60N4utS06MZNrQ0HHs6JWtjqMHGrASHPInBAHs8IIpA8g/exec';
+	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwHEEMiK_lmxiZM5Jkt4gK6dU3WF1sLjP5aHvOGOnyeJK0vkmyhk1-a9DlcNr6fsId0Ng/exec';
 
 	const state = {
 		citas: [],
@@ -13,9 +13,16 @@
 
 	const LIST_BATCH_SIZE = 30;
 	const AUTH_SESSION_KEY = 'gestion_psicologia_auth';
+	const MEET_LINKS_BY_INSTITUTE = {
+		jvn: 'https://meet.google.com/uft-mcjq-pdv',
+		ie: 'https://meet.google.com/ouj-kben-cjo',
+	};
 
 	const ui = {
 		app: document.getElementById('app'),
+		appHeader: document.getElementById('appHeader'),
+		mainContent: document.getElementById('mainContent'),
+		workspacePanels: document.getElementById('workspacePanels'),
 		loginScreen: document.getElementById('loginScreen'),
 		loginForm: document.getElementById('loginForm'),
 		loginError: document.getElementById('loginError'),
@@ -34,11 +41,24 @@
 		globalLoader: document.getElementById('globalLoader'),
 		toastContainer: document.getElementById('toastContainer'),
 		refreshBtn: document.getElementById('refreshBtn'),
+		logoutBtn: document.getElementById('logoutBtn'),
 
 		kpiTotal: document.getElementById('kpiTotal'),
 		kpiRealizadas: document.getElementById('kpiRealizadas'),
 		kpiNoAsistio: document.getElementById('kpiNoAsistio'),
 		kpiCanceladas: document.getElementById('kpiCanceladas'),
+		kpiReprogramadas: document.getElementById('kpiReprogramadas'),
+
+		kpiTotalJVN: document.getElementById('kpiTotalJVN'),
+		kpiTotalIE: document.getElementById('kpiTotalIE'),
+		kpiRealizadasJVN: document.getElementById('kpiRealizadasJVN'),
+		kpiRealizadasIE: document.getElementById('kpiRealizadasIE'),
+		kpiNoAsistioJVN: document.getElementById('kpiNoAsistioJVN'),
+		kpiNoAsistioIE: document.getElementById('kpiNoAsistioIE'),
+		kpiCanceladasJVN: document.getElementById('kpiCanceladasJVN'),
+		kpiCanceladasIE: document.getElementById('kpiCanceladasIE'),
+		kpiReprogramadasJVN: document.getElementById('kpiReprogramadasJVN'),
+		kpiReprogramadasIE: document.getElementById('kpiReprogramadasIE'),
 
 		resumenCorreo: document.getElementById('resumenCorreo'),
 		resumenCreado: document.getElementById('resumenCreado'),
@@ -58,6 +78,12 @@
 
 		notasForm: document.getElementById('notasForm'),
 		reminderForm: document.getElementById('reminderForm'),
+		sendReminderBtn: document.getElementById('sendReminderBtn'),
+		reminderModalidadBadge: document.getElementById('reminderModalidadBadge'),
+		reminderMeetLabel: document.getElementById('reminderMeetLabel'),
+		reminderMeetLinkPreview: document.getElementById('reminderMeetLinkPreview'),
+		reminderStateHelp: document.getElementById('reminderStateHelp'),
+		reminderMeetQuickAccess: document.getElementById('reminderMeetQuickAccess'),
 
 		personalModal: document.getElementById('personalModal'),
 		personalForm: document.getElementById('personalForm'),
@@ -71,6 +97,7 @@
 	function init() {
 		bindEvents();
 		renderQuickFilters();
+		adjustWorkspacePanelsHeight();
 
 		if (hasActiveAuthSession_()) {
 			completeLoginUI_();
@@ -89,12 +116,14 @@
 		ui.notasForm.addEventListener('submit', handleSaveNotas);
 		ui.reminderForm.addEventListener('submit', handleSendReminder);
 		ui.refreshBtn.addEventListener('click', loadCitas);
+		ui.logoutBtn.addEventListener('click', handleLogout);
 		ui.tipoDificultadSelect.addEventListener('change', handleTipoDificultadChange);
 
 		ui.openEditPersonalBtn.addEventListener('click', openPersonalModal);
 		ui.closePersonalModalBtn.addEventListener('click', closePersonalModal);
 		ui.cancelPersonalBtn.addEventListener('click', closePersonalModal);
 		ui.personalForm.addEventListener('submit', handleSavePersonalInfo);
+		window.addEventListener('resize', adjustWorkspacePanelsHeight);
 	}
 
 	function handleLogin(e) {
@@ -119,6 +148,15 @@
 			.finally(() => setButtonLoading(submitBtn, false));
 	}
 
+	function handleLogout() {
+		clearAuthSession_();
+		state.citas = [];
+		state.filtered = [];
+		state.selectedId = null;
+		showLoginUI_();
+		showToast('Sesión cerrada correctamente', 'info');
+	}
+
 	function loadCitas() {
 		if (!state.isAuthenticated) return;
 
@@ -140,6 +178,8 @@
 			})
 			.catch((err) => showToast(err.message || 'Error al cargar citas', 'error'))
 			.finally(() => setLoading(false));
+
+		requestAnimationFrame(adjustWorkspacePanelsHeight);
 	}
 
 	function handleSearch(e) {
@@ -167,6 +207,7 @@
 	function applyFilters() {
 		const query = normalize(ui.searchInput.value);
 		const filteredByQuick = state.citas.filter((cita) => matchesQuickFilter(cita, state.quickFilter));
+		const instituteOnlyFilter = getInstituteSearchFilter(query);
 
 		if (!query) {
 			state.filtered = filteredByQuick;
@@ -174,8 +215,14 @@
 			return;
 		}
 
+		if (instituteOnlyFilter) {
+			state.filtered = filteredByQuick.filter((cita) => getInstituteGroup(cita.instituto) === instituteOnlyFilter);
+			renderList();
+			return;
+		}
+
 		state.filtered = filteredByQuick.filter((cita) => {
-			const stack = [
+			const stack = normalize([
 				cita.reservadoPor,
 				cita.correo,
 				cita.telefono,
@@ -184,8 +231,7 @@
 				cita.fecha,
 				cita.hora,
 			]
-				.join(' ')
-				.toLowerCase();
+				.join(' '));
 			return stack.includes(query);
 		});
 		renderList();
@@ -194,22 +240,64 @@
 	function renderKpis(citas) {
 		const data = {
 			total: citas.length,
+			totalJVN: 0,
+			totalIE: 0,
 			realizadas: 0,
+			realizadasJVN: 0,
+			realizadasIE: 0,
 			noAsistio: 0,
+			noAsistioJVN: 0,
+			noAsistioIE: 0,
 			canceladas: 0,
+			canceladasJVN: 0,
+			canceladasIE: 0,
+			reprogramadas: 0,
+			reprogramadasJVN: 0,
+			reprogramadasIE: 0,
 		};
 
 		citas.forEach((cita) => {
 			const estado = normalize(cita.estado);
-			if (estado === 'realizada') data.realizadas += 1;
-			else if (estado === 'no asistió' || estado === 'no asistio') data.noAsistio += 1;
-			else if (estado === 'cancelada') data.canceladas += 1;
+			const group = getInstituteGroup(cita.instituto);
+
+			if (group === 'jvn') data.totalJVN += 1;
+			if (group === 'ie') data.totalIE += 1;
+
+			if (estado === 'realizada') {
+				data.realizadas += 1;
+				if (group === 'jvn') data.realizadasJVN += 1;
+				if (group === 'ie') data.realizadasIE += 1;
+			} else if (estado === 'no asistio') {
+				data.noAsistio += 1;
+				if (group === 'jvn') data.noAsistioJVN += 1;
+				if (group === 'ie') data.noAsistioIE += 1;
+			} else if (estado === 'cancelada') {
+				data.canceladas += 1;
+				if (group === 'jvn') data.canceladasJVN += 1;
+				if (group === 'ie') data.canceladasIE += 1;
+			} else if (estado === 'reprogramada') {
+				data.reprogramadas += 1;
+				if (group === 'jvn') data.reprogramadasJVN += 1;
+				if (group === 'ie') data.reprogramadasIE += 1;
+			}
 		});
 
 		ui.kpiTotal.textContent = data.total;
 		ui.kpiRealizadas.textContent = data.realizadas;
 		ui.kpiNoAsistio.textContent = data.noAsistio;
 		ui.kpiCanceladas.textContent = data.canceladas;
+		ui.kpiReprogramadas.textContent = data.reprogramadas;
+
+		ui.kpiTotalJVN.textContent = data.totalJVN;
+		ui.kpiTotalIE.textContent = data.totalIE;
+		ui.kpiRealizadasJVN.textContent = data.realizadasJVN;
+		ui.kpiRealizadasIE.textContent = data.realizadasIE;
+		ui.kpiNoAsistioJVN.textContent = data.noAsistioJVN;
+		ui.kpiNoAsistioIE.textContent = data.noAsistioIE;
+		ui.kpiCanceladasJVN.textContent = data.canceladasJVN;
+		ui.kpiCanceladasIE.textContent = data.canceladasIE;
+		ui.kpiReprogramadasJVN.textContent = data.reprogramadasJVN;
+		ui.kpiReprogramadasIE.textContent = data.reprogramadasIE;
 	}
 
 	function renderList() {
@@ -330,8 +418,8 @@
 
 		hydrateForm(ui.reminderForm, {
 			mensaje: '',
-			meetLink: '',
 		});
+		renderReminderPanel(cita);
 
 		hydrateForm(ui.personalForm, {
 			reservadoPor: cita.reservadoPor,
@@ -415,12 +503,20 @@
 		e.preventDefault();
 		const cita = getSelectedCita();
 		if (!cita) return;
+		if (!canSendReminderByEstado(cita)) {
+			showToast('Solo puedes enviar recordatorio cuando el estado está Programada o vacío.', 'info');
+			return;
+		}
 
-		const { mensaje, meetLink } = getFormData(ui.reminderForm);
+		const { mensaje } = getFormData(ui.reminderForm);
 		if (!cita.correo) {
 			showToast('La cita no tiene correo registrado', 'error');
 			return;
 		}
+
+		const modalidadType = getModalidadType(cita);
+		const isVirtual = modalidadType === 'virtual';
+		const meetLink = isVirtual ? getMeetLinkByCita(cita) : '';
 
 		const payload = {
 			estudiante: cita.reservadoPor || '',
@@ -454,6 +550,24 @@
 		ui.personalModal.classList.add('hidden');
 	}
 
+	function adjustWorkspacePanelsHeight() {
+		if (!ui.workspacePanels) return;
+
+		const isDesktop = window.matchMedia('(min-width: 1280px)').matches;
+		if (!isDesktop || !state.isAuthenticated) {
+			ui.workspacePanels.style.height = '';
+			return;
+		}
+
+		const rect = ui.workspacePanels.getBoundingClientRect();
+		const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+		const bottomGap = 12;
+		const available = Math.floor(viewportHeight - rect.top - bottomGap);
+		const targetHeight = Math.max(280, available);
+
+		ui.workspacePanels.style.height = `${targetHeight}px`;
+	}
+
 	function getSelectedCita() {
 		return state.citas.find((c) => c.id === state.selectedId) || null;
 	}
@@ -479,11 +593,103 @@
 
 	function getInstituteBadge(instituto) {
 		const text = escapeHtml(instituto || 'Sin instituto');
-		const isPurple = normalize(instituto).includes('adni');
-		const cls = isPurple
+		const group = getInstituteGroup(instituto);
+		const cls = group === 'jvn'
 			? 'bg-purple-100 text-purple-700'
-			: 'bg-orange-100 text-orange-700';
+			: group === 'ie'
+				? 'bg-orange-100 text-orange-700'
+				: 'bg-gray-100 text-gray-700';
 		return `<span class="${cls} text-[11px] font-medium px-2 py-1 rounded-full">${text}</span>`;
+	}
+
+	function getInstituteGroup(instituto) {
+		const inst = normalize(instituto);
+		if (!inst) return 'other';
+
+		if (
+			inst.includes('jvn') ||
+			inst.includes('neumann') ||
+			inst.includes('jhonn') ||
+			inst.includes('john') ||
+			inst.includes('vonn') ||
+			inst.includes('von neumann')
+		) {
+			return 'jvn';
+		}
+
+		if (inst.includes('iempresa') || inst.includes('instituto de la empresa') || inst.includes('empresa')) {
+			return 'ie';
+		}
+
+		return 'other';
+	}
+
+	function getInstituteSearchFilter(query) {
+		if (!query) return null;
+		if (query === 'jvn' || query === 'jhonn vonn neumann' || query === 'john von neumann' || query === 'neumann') {
+			return 'jvn';
+		}
+		if (query === 'iempresa' || query === 'instituto de la empresa' || query === 'ie') {
+			return 'ie';
+		}
+		return null;
+	}
+
+	function getMeetLinkByCita(cita) {
+		const group = getInstituteGroup(cita?.instituto);
+		return MEET_LINKS_BY_INSTITUTE[group] || '';
+	}
+
+	function getModalidadType(cita) {
+		const raw = cita?.modalidad ?? cita?.Modalidad ?? '';
+		const value = normalize(raw);
+		if (value === 'virtual') return 'virtual';
+		if (value === 'presencial') return 'presencial';
+		return 'sin-definir';
+	}
+
+	function canSendReminderByEstado(cita) {
+		const estado = normalize(cita?.estado);
+		return estado === '' || estado === 'programada';
+	}
+
+	function renderReminderPanel(cita) {
+		if (!cita) return;
+
+		const modalidadType = getModalidadType(cita);
+		const meetLink = getMeetLinkByCita(cita);
+		const canSend = canSendReminderByEstado(cita);
+
+		if (modalidadType === 'virtual') {
+			ui.reminderModalidadBadge.className = 'text-[11px] px-2 py-1 rounded-full font-medium bg-blue-100 text-blue-700';
+			ui.reminderModalidadBadge.textContent = 'Modalidad: Virtual';
+			ui.reminderMeetLabel.textContent = 'Este enlace se enviará automáticamente al alumno y será el acceso de la administradora.';
+			ui.reminderMeetLinkPreview.textContent = meetLink || 'Sin enlace configurado para este instituto.';
+
+			if (meetLink) {
+				ui.reminderMeetQuickAccess.href = meetLink;
+				ui.reminderMeetQuickAccess.classList.remove('hidden');
+			} else {
+				ui.reminderMeetQuickAccess.classList.add('hidden');
+			}
+		} else if (modalidadType === 'presencial') {
+			ui.reminderModalidadBadge.className = 'text-[11px] px-2 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700';
+			ui.reminderModalidadBadge.textContent = 'Modalidad: Presencial';
+			ui.reminderMeetLabel.textContent = 'Esta cita es Presencial; no se enviará enlace de Meet.';
+			ui.reminderMeetLinkPreview.textContent = 'No aplica para modalidad presencial.';
+			ui.reminderMeetQuickAccess.classList.add('hidden');
+		} else {
+			ui.reminderModalidadBadge.className = 'text-[11px] px-2 py-1 rounded-full font-medium bg-gray-200 text-gray-700';
+			ui.reminderModalidadBadge.textContent = 'Modalidad: Sin definir';
+			ui.reminderMeetLabel.textContent = 'Defina si la cita es Virtual o Presencial para habilitar el acceso directo.';
+			ui.reminderMeetLinkPreview.textContent = meetLink || 'Sin enlace configurado para este instituto.';
+			ui.reminderMeetQuickAccess.classList.add('hidden');
+		}
+
+		ui.sendReminderBtn.disabled = !canSend;
+		ui.reminderStateHelp.textContent = canSend
+			? ''
+			: 'Solo se puede enviar cuando aun está en "Programada".';
 	}
 
 	function hydrateForm(form, data) {
@@ -609,6 +815,8 @@
 
 	function matchesQuickFilter(cita, quickFilter) {
 		if (quickFilter === 'todas') return true;
+		if (quickFilter === 'jvn') return getInstituteGroup(cita.instituto) === 'jvn';
+		if (quickFilter === 'iempresa') return getInstituteGroup(cita.instituto) === 'ie';
 
 		const citaDate = parseDateOnly(cita.fecha);
 		const today = getTodayAtMidnight();
@@ -816,7 +1024,11 @@
 	}
 
 	function normalize(v) {
-		return String(v || '').toLowerCase().trim();
+		return String(v || '')
+			.normalize('NFD')
+			.replace(/[\u0300-\u036f]/g, '')
+			.toLowerCase()
+			.trim();
 	}
 
 	function escapeHtml(str) {
@@ -842,10 +1054,15 @@
 		state.isAuthenticated = true;
 		ui.loginScreen.classList.add('hidden');
 		ui.app.classList.remove('hidden');
+		requestAnimationFrame(adjustWorkspacePanelsHeight);
 	}
 
 	function persistAuthSession_() {
 		sessionStorage.setItem(AUTH_SESSION_KEY, '1');
+	}
+
+	function clearAuthSession_() {
+		sessionStorage.removeItem(AUTH_SESSION_KEY);
 	}
 
 	function hasActiveAuthSession_() {
