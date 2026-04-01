@@ -1,5 +1,5 @@
 (() => {
-	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwHEEMiK_lmxiZM5Jkt4gK6dU3WF1sLjP5aHvOGOnyeJK0vkmyhk1-a9DlcNr6fsId0Ng/exec';
+	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwEMSUUNGK1uwNIlZjxHIjMXoUJs9nZIq3JjE7uWMYFL8JRTDee61ygay3RH3I5ttyk5w/exec';
 	const DELETE_CITA_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbx0Yxqxhk-_15pSZAFTR_omHFzGWX4kjzikyi4QgOJNJnL8J2Dh8NFhZWlbM3uDwqAL/exec';
 
 	const state = {
@@ -8,6 +8,17 @@
 		selectedId: null,
 		activeTab: 'resumen',
 		quickFilter: 'pendientes',
+		listInstituteFilters: {
+			jvn: false,
+			iempresa: false,
+		},
+		calendarInstituteFilters: {
+			jvn: false,
+			iempresa: false,
+		},
+		leftView: 'list',
+		calendarCursor: new Date(),
+		calendarSelectedDate: '',
 		visibleCount: 30,
 		isAuthenticated: false,
 	};
@@ -19,6 +30,11 @@
 		ie: 'https://meet.google.com/ouj-kben-cjo',
 	};
 
+	const INSTITUTE_FILTER_CONFIG = {
+		jvn: { label: 'Neumann', fullLabel: 'Neumann' },
+		iempresa: { label: 'IEmpresa', fullLabel: 'IEmpresa' },
+	};
+
 	const ui = {
 		app: document.getElementById('app'),
 		appHeader: document.getElementById('appHeader'),
@@ -28,8 +44,20 @@
 		loginForm: document.getElementById('loginForm'),
 		loginError: document.getElementById('loginError'),
 		listContainer: document.getElementById('listContainer'),
+		calendarContainer: document.getElementById('calendarContainer'),
+		searchBlock: document.getElementById('searchBlock'),
 		searchInput: document.getElementById('searchInput'),
-		quickFilters: document.getElementById('quickFilters'),
+		quickFiltersMain: document.getElementById('quickFiltersMain'),
+		quickFiltersInstitutes: document.getElementById('quickFiltersInstitutes'),
+		viewToggle: document.getElementById('viewToggle'),
+		viewListBtn: document.getElementById('viewListBtn'),
+		viewCalendarBtn: document.getElementById('viewCalendarBtn'),
+		calendarMonthLabel: document.getElementById('calendarMonthLabel'),
+		calendarWeekdays: document.getElementById('calendarWeekdays'),
+		calendarGrid: document.getElementById('calendarGrid'),
+		calendarDayList: document.getElementById('calendarDayList'),
+		calendarPrevBtn: document.getElementById('calendarPrevBtn'),
+		calendarNextBtn: document.getElementById('calendarNextBtn'),
 		emptyState: document.getElementById('emptyState'),
 		detailPanel: document.getElementById('detailPanel'),
 		detailNombre: document.getElementById('detailNombre'),
@@ -97,8 +125,12 @@
 	document.addEventListener('DOMContentLoaded', init);
 
 	function init() {
+		state.calendarCursor = getStartOfMonth(new Date());
+		state.calendarSelectedDate = getDefaultBusinessDayIso(new Date());
 		bindEvents();
 		renderQuickFilters();
+		renderLeftViewToggle();
+		renderLeftControlsVisibility();
 		adjustWorkspacePanelsHeight();
 
 		if (hasActiveAuthSession_()) {
@@ -113,7 +145,13 @@
 	function bindEvents() {
 		ui.loginForm.addEventListener('submit', handleLogin);
 		ui.searchInput.addEventListener('input', handleSearch);
-		ui.quickFilters.addEventListener('click', handleQuickFilterClick);
+		ui.quickFiltersMain.addEventListener('click', handleQuickFilterClick);
+		ui.quickFiltersInstitutes.addEventListener('click', handleQuickFilterClick);
+		ui.viewToggle.addEventListener('click', handleViewToggleClick);
+		ui.calendarPrevBtn.addEventListener('click', handleCalendarPrevMonth);
+		ui.calendarNextBtn.addEventListener('click', handleCalendarNextMonth);
+		ui.calendarGrid.addEventListener('click', handleCalendarDayClick);
+		ui.calendarDayList.addEventListener('click', handleCalendarAgendaClick);
 		ui.tabsNav.addEventListener('click', handleTabClick);
 		ui.notasForm.addEventListener('submit', handleSaveNotas);
 		ui.anularCitaBtn.addEventListener('click', handleDeleteCita);
@@ -176,7 +214,7 @@
 				}
 
 				renderKpis(state.citas);
-				renderList();
+				renderLeftPane();
 				renderDetail();
 			})
 			.catch((err) => showToast(err.message || 'Error al cargar citas', 'error'))
@@ -194,37 +232,147 @@
 	function handleQuickFilterClick(e) {
 		const btn = e.target.closest('[data-filter]');
 		if (!btn) return;
+		const filter = btn.dataset.filter || 'pendientes';
 
-		state.quickFilter = btn.dataset.filter || 'pendientes';
+		if (filter === 'jvn' || filter === 'iempresa') {
+			const targetFilters = state.leftView === 'calendar'
+				? state.calendarInstituteFilters
+				: state.listInstituteFilters;
+			const wasActive = Boolean(targetFilters[filter]);
+
+			if (wasActive) {
+				targetFilters.jvn = false;
+				targetFilters.iempresa = false;
+			} else if (filter === 'jvn') {
+				targetFilters.jvn = true;
+				targetFilters.iempresa = false;
+			} else {
+				targetFilters.iempresa = true;
+				targetFilters.jvn = false;
+			}
+			state.visibleCount = LIST_BATCH_SIZE;
+			renderQuickFilters();
+			applyFilters();
+			return;
+		}
+
+		state.quickFilter = filter;
 		state.visibleCount = LIST_BATCH_SIZE;
 		renderQuickFilters();
 		applyFilters();
 	}
 
+	function handleViewToggleClick(e) {
+		const btn = e.target.closest('[data-view]');
+		if (!btn) return;
+
+		switchLeftView(btn.dataset.view || 'list');
+	}
+
+	function switchLeftView(view) {
+		if (view !== 'list' && view !== 'calendar') return;
+		state.leftView = view;
+		renderLeftViewToggle();
+		renderLeftControlsVisibility();
+		renderQuickFilters();
+		applyFilters();
+	}
+
+	function renderLeftControlsVisibility() {
+		const isCalendar = state.leftView === 'calendar';
+		ui.searchBlock.classList.toggle('hidden', isCalendar);
+		ui.quickFiltersMain.classList.toggle('hidden', isCalendar);
+	}
+
 	function renderQuickFilters() {
-		ui.quickFilters.querySelectorAll('.pill-btn').forEach((btn) => {
+		renderMainQuickFilters();
+		renderInstituteQuickFilters();
+	}
+
+	function renderMainQuickFilters() {
+		if (!ui.quickFiltersMain) return;
+		ui.quickFiltersMain.querySelectorAll('.pill-btn').forEach((btn) => {
 			btn.classList.toggle('active-pill', btn.dataset.filter === state.quickFilter);
 		});
 	}
 
+	function renderInstituteQuickFilters() {
+		if (!ui.quickFiltersInstitutes) return;
+		const filtersByView = state.leftView === 'calendar'
+			? state.calendarInstituteFilters
+			: state.listInstituteFilters;
+
+		const chips = ['jvn', 'iempresa']
+			.map((filter) => {
+				const active = Boolean(filtersByView[filter]);
+				const config = INSTITUTE_FILTER_CONFIG[filter];
+				const label = config?.label || filter.toUpperCase();
+				const colorClass = filter === 'jvn'
+					? (active
+						? 'bg-purple-600 text-white border-purple-600 hover:bg-purple-700'
+						: 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200')
+					: (active
+						? 'bg-orange-500 text-white border-orange-500 hover:bg-orange-600'
+						: 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200');
+				return `
+					<button data-filter="${filter}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border cursor-pointer transition ${colorClass}">
+						<span>${escapeHtml(label)}</span>
+						${active ? '<span class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white/20 text-[10px] font-bold leading-none">×</span>' : ''}
+					</button>
+				`;
+			})
+			.join('');
+
+		ui.quickFiltersInstitutes.innerHTML = `
+			<span class="text-[10px] text-gray-400 font-medium mr-1">Filtros:</span>
+			${chips}
+		`;
+	}
+
+	function renderLeftViewToggle() {
+		if (!ui.viewToggle) return;
+		ui.viewListBtn.classList.toggle('active-pill', state.leftView === 'list');
+		ui.viewCalendarBtn.classList.toggle('active-pill', state.leftView === 'calendar');
+	}
+
+	function renderLeftPane() {
+		if (state.leftView === 'calendar') {
+			ui.listContainer.classList.add('hidden');
+			ui.calendarContainer.classList.remove('hidden');
+			renderCalendar();
+			return;
+		}
+
+		ui.calendarContainer.classList.add('hidden');
+		ui.listContainer.classList.remove('hidden');
+		renderList();
+	}
+
 	function applyFilters() {
-		const query = normalize(ui.searchInput.value);
-		const filteredByQuick = state.citas.filter((cita) => matchesQuickFilter(cita, state.quickFilter));
-		const instituteOnlyFilter = getInstituteSearchFilter(query);
+		const isCalendar = state.leftView === 'calendar';
+		const query = isCalendar ? '' : normalize(ui.searchInput.value);
+		const effectiveQuickFilter = isCalendar ? 'todas' : state.quickFilter;
+		const filteredByQuick = state.citas.filter((cita) => matchesQuickFilter(cita, effectiveQuickFilter));
+		const instituteFiltersByView = isCalendar ? state.calendarInstituteFilters : state.listInstituteFilters;
+		const activeInstitutes = Object.entries(instituteFiltersByView)
+			.filter(([, enabled]) => enabled)
+			.map(([key]) => key);
+
+		const filteredByInstitute = !activeInstitutes.length
+			? filteredByQuick
+			: filteredByQuick.filter((cita) => {
+				const group = getInstituteGroup(cita.instituto);
+				if (group === 'ie') return activeInstitutes.includes('iempresa');
+				return activeInstitutes.includes(group);
+			});
 
 		if (!query) {
-			state.filtered = filteredByQuick;
-			renderList();
+			state.filtered = filteredByInstitute;
+			renderLeftPane();
 			return;
 		}
 
-		if (instituteOnlyFilter) {
-			state.filtered = filteredByQuick.filter((cita) => getInstituteGroup(cita.instituto) === instituteOnlyFilter);
-			renderList();
-			return;
-		}
-
-		state.filtered = filteredByQuick.filter((cita) => {
+		state.filtered = filteredByInstitute.filter((cita) => {
 			const stack = normalize([
 				cita.reservadoPor,
 				cita.correo,
@@ -237,7 +385,7 @@
 				.join(' '));
 			return stack.includes(query);
 		});
-		renderList();
+		renderLeftPane();
 	}
 
 	function renderKpis(citas) {
@@ -370,6 +518,243 @@
 		}
 	}
 
+	function renderCalendar() {
+		if (!ui.calendarGrid || !ui.calendarMonthLabel) return;
+
+		const monthStart = getStartOfMonth(state.calendarCursor || new Date());
+		state.calendarCursor = monthStart;
+
+		const year = monthStart.getFullYear();
+		const month = monthStart.getMonth();
+		const daysInMonth = new Date(year, month + 1, 0).getDate();
+		const firstDayOffset = (() => {
+			const weekday = (monthStart.getDay() + 6) % 7;
+			return weekday >= 5 ? 0 : weekday;
+		})();
+
+		ui.calendarMonthLabel.textContent = capitalizeFirst(monthStart.toLocaleDateString('es-PE', {
+			month: 'long',
+			year: 'numeric',
+		}));
+		ui.calendarMonthLabel.className = 'text-base font-semibold text-gray-900 tracking-tight';
+
+		const citasByDate = groupCitasByDate(state.filtered);
+		const todayIso = formatDateToIso_(new Date());
+
+		const weekdays = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie'];
+		const weekdayHeaderHtml = weekdays
+			.map((d) => `<div class="text-center py-1 font-medium">${d}</div>`)
+			.join('');
+
+		const cells = [];
+		for (let i = 0; i < firstDayOffset; i += 1) {
+			cells.push('<div class="min-h-[72px] rounded-lg border border-transparent"></div>');
+		}
+
+		for (let day = 1; day <= daysInMonth; day += 1) {
+			const weekdayIndex = new Date(year, month, day).getDay();
+			if (weekdayIndex === 0 || weekdayIndex === 6) continue;
+
+			const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+			const citasDelDia = citasByDate.get(iso) || [];
+			const hasCitas = citasDelDia.length > 0;
+			const isToday = iso === todayIso;
+			const isSelected = state.calendarSelectedDate === iso;
+			const dayNumberClass = isToday
+				? 'inline-flex items-center justify-center w-7 h-7 rounded-full bg-blue-100 text-blue-700 font-semibold'
+				: 'text-[#374151] font-medium';
+			const indicatorHtml = hasCitas ? buildCalendarCitaIndicator(citasDelDia) : '';
+
+			cells.push(`
+				<button
+					type="button"
+					data-date="${iso}"
+					class="min-h-[74px] rounded-xl border text-left px-2 pt-0 pb-1.5 transition relative overflow-hidden ${
+						hasCitas
+							? 'border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300'
+							: 'border-gray-200 bg-gray-50 text-gray-400 hover:bg-gray-100'
+					} ${isSelected ? 'border-blue-300 bg-blue-50/50 ring-1 ring-blue-200' : ''}"
+				>
+					<div class="flex items-start justify-between gap-2 -mt-0.5">
+						<span class="text-sm ${dayNumberClass}">${String(day).padStart(2, '0')}</span>
+						${isToday ? '<span class="text-[10px] font-semibold text-blue-700">Hoy</span>' : ''}
+					</div>
+					${indicatorHtml}
+				</button>
+			`);
+		}
+
+		const remainder = cells.length % 5;
+		if (remainder > 0) {
+			for (let i = remainder; i < 5; i += 1) {
+				cells.push('<div class="min-h-[72px] rounded-lg border border-transparent"></div>');
+			}
+		}
+
+		const emptyHelp = !state.filtered.length
+			? '<div class="col-span-5 mt-1 text-xs text-gray-500">No hay citas para los filtros actuales.</div>'
+			: '';
+
+		ui.calendarWeekdays.innerHTML = weekdayHeaderHtml;
+		ui.calendarGrid.innerHTML = cells.join('') + emptyHelp;
+		renderCalendarDayList();
+	}
+
+	function buildCalendarCitaIndicator(citasDelDia) {
+		const maxDots = 4;
+		const dots = (citasDelDia || []).slice(0, maxDots);
+		const extraCount = Math.max((citasDelDia || []).length - maxDots, 0);
+		const tooltip = buildCalendarTooltip(citasDelDia);
+
+		const dotsHtml = dots
+			.map((cita) => {
+				const group = getInstituteGroup(cita?.instituto);
+				const dotClass = group === 'jvn'
+					? 'bg-purple-500'
+					: group === 'ie'
+						? 'bg-orange-500'
+						: 'bg-gray-400';
+				return `<span class="inline-block w-1.5 h-1.5 rounded-full ${dotClass}"></span>`;
+			})
+			.join('');
+
+		return `
+			<span title="${escapeAttr(tooltip)}" class="absolute bottom-1.5 left-2 inline-flex items-center gap-1 px-1.5 py-1 rounded-full bg-gray-100 text-[10px] text-gray-600">
+				${dotsHtml}
+				${extraCount > 0 ? `<span class="text-[10px] font-medium text-gray-500">+${extraCount}</span>` : ''}
+			</span>
+		`;
+	}
+
+	function buildCalendarTooltip(citasDelDia) {
+		const total = (citasDelDia || []).length;
+		const counts = { jvn: 0, iempresa: 0, other: 0 };
+
+		(citasDelDia || []).forEach((cita) => {
+			const group = getInstituteGroup(cita?.instituto);
+			if (group === 'jvn') counts.jvn += 1;
+			else if (group === 'ie') counts.iempresa += 1;
+			else counts.other += 1;
+		});
+
+		const parts = [];
+		if (counts.jvn) parts.push(`${counts.jvn} Neumann`);
+		if (counts.iempresa) parts.push(`${counts.iempresa} IEmpresa`);
+		if (counts.other) parts.push(`${counts.other} Otros`);
+
+		return `${total} citas${parts.length ? ` – ${parts.join(', ')}` : ''}`;
+	}
+
+	function handleCalendarPrevMonth() {
+		const base = getStartOfMonth(state.calendarCursor || new Date());
+		state.calendarCursor = new Date(base.getFullYear(), base.getMonth() - 1, 1);
+		renderCalendar();
+	}
+
+	function handleCalendarNextMonth() {
+		const base = getStartOfMonth(state.calendarCursor || new Date());
+		state.calendarCursor = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+		renderCalendar();
+	}
+
+	function handleCalendarDayClick(e) {
+		const btn = e.target.closest('[data-date]');
+		if (!btn) return;
+
+		const iso = btn.dataset.date || '';
+		if (!iso) return;
+
+		state.calendarSelectedDate = iso;
+		renderCalendar();
+	}
+
+	function renderCalendarDayList() {
+		if (!ui.calendarDayList) return;
+
+		const selectedIso = state.calendarSelectedDate;
+		if (!selectedIso) {
+			ui.calendarDayList.innerHTML = '<p class="text-xs text-gray-500">Selecciona un día para ver sus citas.</p>';
+			return;
+		}
+
+		const citasDelDia = state.filtered
+			.filter((cita) => normalizeDateValue(cita.fecha) === selectedIso)
+			.sort((a, b) => getDateTimeValue(a.fecha, a.hora) - getDateTimeValue(b.fecha, b.hora));
+
+		if (!citasDelDia.length) {
+			ui.calendarDayList.innerHTML = `
+				<div class="text-xs text-gray-500">
+					Sin citas para ${escapeHtml(formatDateDisplay(selectedIso))}.
+				</div>
+			`;
+			return;
+		}
+
+		const itemsHtml = citasDelDia
+			.map((cita) => {
+				const active = state.selectedId === cita.id;
+				const modalidad = getModalidadLabel(cita);
+				const instituteLabel = getInstituteDisplayLabel(cita.instituto);
+				const instituteGroup = getInstituteGroup(cita.instituto);
+				const instituteTagClass = instituteGroup === 'jvn'
+					? 'bg-purple-100 text-purple-700'
+					: instituteGroup === 'ie'
+						? 'bg-orange-100 text-orange-700'
+						: 'bg-gray-100 text-gray-700';
+				return `
+					<button
+						type="button"
+						data-agenda-id="${escapeAttr(cita.id)}"
+						class="w-full text-left rounded-lg border px-2.5 py-2 mb-2 transition ${active ? 'border-brand-300 bg-brand-50' : 'border-gray-200 hover:bg-gray-50'}"
+					>
+						<div class="flex items-center justify-between gap-2">
+							<p class="text-xs font-medium text-gray-900 truncate">${escapeHtml(cita.reservadoPor || 'Sin nombre')}</p>
+						</div>
+						<div class="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
+							<span>${escapeHtml(formatTimeDisplay(cita.hora))}</span>
+							${modalidad ? `<span class="font-semibold text-gray-700">${escapeHtml(modalidad)}</span>` : ''}
+							<span class="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${instituteTagClass}">${escapeHtml(instituteLabel)}</span>
+						</div>
+					</button>
+				`;
+			})
+			.join('');
+
+		ui.calendarDayList.innerHTML = `
+			<div class="flex items-center justify-between mb-2">
+				<p class="text-xs font-semibold text-gray-700">${escapeHtml(formatDateDisplay(selectedIso))}</p>
+				<p class="text-[11px] text-gray-500">${citasDelDia.length} registros</p>
+			</div>
+			${itemsHtml}
+		`;
+	}
+
+	function handleCalendarAgendaClick(e) {
+		const btn = e.target.closest('[data-agenda-id]');
+		if (!btn) return;
+
+		state.selectedId = btn.dataset.agendaId;
+		renderCalendarDayList();
+		renderDetail();
+	}
+
+	function groupCitasByDate(citas) {
+		const map = new Map();
+		(citas || []).forEach((cita) => {
+			const iso = normalizeDateValue(cita.fecha);
+			if (!iso) return;
+			if (!map.has(iso)) map.set(iso, []);
+			map.get(iso).push(cita);
+		});
+		return map;
+	}
+
+	function normalizeDateValue(value) {
+		const d = parseDateOnly(value);
+		if (!d) return '';
+		return formatDateToIso_(d);
+	}
+
 	function renderDetail() {
 		const cita = getSelectedCita();
 		if (!cita) {
@@ -422,6 +807,7 @@
 
 		hydrateForm(ui.reminderForm, {
 			mensaje: '',
+			linkOpcional: '',
 		});
 		renderReminderPanel(cita);
 
@@ -557,7 +943,7 @@
 			return;
 		}
 
-		const { mensaje } = getFormData(ui.reminderForm);
+		const { mensaje, linkOpcional } = getFormData(ui.reminderForm);
 		if (!cita.correo) {
 			showToast('La cita no tiene correo registrado', 'error');
 			return;
@@ -571,6 +957,7 @@
 			estudiante: cita.reservadoPor || '',
 			correo: cita.correo || '',
 			mensaje: mensaje || '',
+			linkOpcional: linkOpcional || '',
 			meet: meetLink || '',
 			fechaCita: formatDateDisplay(cita.fecha),
 			horaCita: formatTimeDisplay(cita.hora),
@@ -641,7 +1028,7 @@
 	}
 
 	function getInstituteBadge(instituto) {
-		const text = escapeHtml(instituto || 'Sin instituto');
+		const text = escapeHtml(getInstituteDisplayLabel(instituto));
 		const group = getInstituteGroup(instituto);
 		const cls = group === 'jvn'
 			? 'bg-purple-100 text-purple-700'
@@ -664,6 +1051,13 @@
 		return '';
 	}
 
+	function getInstituteDisplayLabel(instituto) {
+		const group = getInstituteGroup(instituto);
+		if (group === 'jvn') return INSTITUTE_FILTER_CONFIG.jvn.fullLabel;
+		if (group === 'ie') return INSTITUTE_FILTER_CONFIG.iempresa.fullLabel;
+		return String(instituto || 'Sin instituto').trim() || 'Sin instituto';
+	}
+
 	function getInstituteGroup(instituto) {
 		const inst = normalize(instituto);
 		if (!inst) return 'other';
@@ -684,17 +1078,6 @@
 		}
 
 		return 'other';
-	}
-
-	function getInstituteSearchFilter(query) {
-		if (!query) return null;
-		if (query === 'jvn' || query === 'jhonn vonn neumann' || query === 'john von neumann' || query === 'neumann') {
-			return 'jvn';
-		}
-		if (query === 'iempresa' || query === 'instituto de la empresa' || query === 'ie') {
-			return 'ie';
-		}
-		return null;
 	}
 
 	function getMeetLinkByCita(cita) {
@@ -725,7 +1108,7 @@
 		if (modalidadType === 'virtual') {
 			ui.reminderModalidadBadge.className = 'text-[11px] px-2 py-1 rounded-full font-medium bg-blue-100 text-blue-700';
 			ui.reminderModalidadBadge.textContent = 'Modalidad: Virtual';
-			ui.reminderMeetLabel.textContent = 'Este enlace se enviará automáticamente al alumno y será el acceso de la administradora.';
+			ui.reminderMeetLabel.textContent = 'Este enlace se enviará automáticamente.';
 			ui.reminderMeetLinkPreview.textContent = meetLink || 'Sin enlace configurado para este instituto.';
 
 			if (meetLink) {
@@ -738,7 +1121,7 @@
 			ui.reminderModalidadBadge.className = 'text-[11px] px-2 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700';
 			ui.reminderModalidadBadge.textContent = 'Modalidad: Presencial';
 			ui.reminderMeetLabel.textContent = 'Esta cita es Presencial; no se enviará enlace de Meet.';
-			ui.reminderMeetLinkPreview.textContent = 'No aplica para modalidad presencial.';
+			ui.reminderMeetLinkPreview.textContent = '';
 			ui.reminderMeetQuickAccess.classList.add('hidden');
 		} else {
 			ui.reminderModalidadBadge.className = 'text-[11px] px-2 py-1 rounded-full font-medium bg-gray-200 text-gray-700';
@@ -877,8 +1260,6 @@
 
 	function matchesQuickFilter(cita, quickFilter) {
 		if (quickFilter === 'todas') return true;
-		if (quickFilter === 'jvn') return getInstituteGroup(cita.instituto) === 'jvn';
-		if (quickFilter === 'iempresa') return getInstituteGroup(cita.instituto) === 'ie';
 
 		const citaDate = parseDateOnly(cita.fecha);
 		const today = getTodayAtMidnight();
@@ -1062,6 +1443,26 @@
 		return fallback;
 	}
 
+	function getStartOfMonth(value) {
+		const d = value instanceof Date ? new Date(value) : new Date();
+		d.setDate(1);
+		d.setHours(0, 0, 0, 0);
+		return d;
+	}
+
+	function getDefaultBusinessDayIso(value) {
+		const date = value instanceof Date ? new Date(value) : new Date();
+		const weekday = date.getDay();
+
+		if (weekday === 6) {
+			date.setDate(date.getDate() + 2);
+		} else if (weekday === 0) {
+			date.setDate(date.getDate() + 1);
+		}
+
+		return formatDateToIso_(date);
+	}
+
 	function getTodayAtMidnight() {
 		const today = new Date();
 		today.setHours(0, 0, 0, 0);
@@ -1091,6 +1492,12 @@
 			.replace(/[\u0300-\u036f]/g, '')
 			.toLowerCase()
 			.trim();
+	}
+
+	function capitalizeFirst(value) {
+		const text = String(value || '');
+		if (!text) return '';
+		return text.charAt(0).toUpperCase() + text.slice(1);
 	}
 
 	function escapeHtml(str) {
