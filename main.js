@@ -1,5 +1,5 @@
 (() => {
-	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwEMSUUNGK1uwNIlZjxHIjMXoUJs9nZIq3JjE7uWMYFL8JRTDee61ygay3RH3I5ttyk5w/exec';
+	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzX6M5CfWHB6Ez27hFzTHC-xzsTbU-g7DPcsZjhiBkVS_tXpFACxn-XfGkUneIFx8R5lA/exec';
 	const DELETE_CITA_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbx0Yxqxhk-_15pSZAFTR_omHFzGWX4kjzikyi4QgOJNJnL8J2Dh8NFhZWlbM3uDwqAL/exec';
 
 	const state = {
@@ -92,6 +92,7 @@
 		resumenCorreo: document.getElementById('resumenCorreo'),
 		resumenCreado: document.getElementById('resumenCreado'),
 		resumenTelefono: document.getElementById('resumenTelefono'),
+		resumenDni: document.getElementById('resumenDni'),
 		resumenEdadCiclo: document.getElementById('resumenEdadCiclo'),
 		resumenCarrera: document.getElementById('resumenCarrera'),
 		resumenConvive: document.getElementById('resumenConvive'),
@@ -779,6 +780,7 @@
 		ui.resumenCreado.textContent = `Cita registrada en el sistema ${creadoVista}`;
 		ui.resumenCorreo.textContent = cita.correo || '—';
 		ui.resumenTelefono.textContent = cita.telefono || '—';
+		ui.resumenDni.textContent = cita.dni || cita.DNI || '—';
 		ui.resumenEdadCiclo.textContent = `${cita.edad || '—'} años / Ciclo ${cita.ciclo || '—'}`;
 		ui.resumenCarrera.textContent = cita.carrera || '—';
 		ui.resumenConvive.textContent = cita.conviveCon || '—';
@@ -815,6 +817,7 @@
 			reservadoPor: cita.reservadoPor,
 			correo: cita.correo,
 			telefono: cita.telefono,
+			dni: cita.dni || cita.DNI,
 			edad: cita.edad,
 			ciclo: cita.ciclo,
 			carrera: cita.carrera,
@@ -881,6 +884,7 @@
 		if (!cita) return;
 
 		const payload = getFormData(ui.personalForm);
+		payload.DNI = payload.dni;
 		const submitBtn = document.getElementById('savePersonalBtn');
 		setButtonLoading(submitBtn, true);
 
